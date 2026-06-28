@@ -1,0 +1,19 @@
+[project]
+name = "nanolm"
+version = "0.1.0"
+description = "Tiny language model from scratch — every part visible and adjustable"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
+    "rich>=13.0.0",
+    "torch>=2.0.0",   # Phase 7 — PyTorch mirror on MPS (Apple Silicon)
+]
+
+[tool.uv]
+package = false   # scripts project — uv installs deps only, no package build
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

@@ -1,0 +1,40 @@
+model:
+  type: transformer    # 'bigram' (Phase 2) | 'transformer' (Phase 3+)
+  block_size: 32       # context window length (tokens seen before predicting next)
+  embed_dim: 64        # embedding / hidden dimension
+  n_layers: 2          # Phase 4: stack N transformer blocks (was 1 in Phase 3)
+  n_heads: 4           # Phase 4: H parallel attention heads (was 1 in Phase 3)
+  dropout: 0.1         # Phase 4: dropout rate (0.0 = disabled, used in Phase 3)
+
+training:
+  optimizer: adamw     # 'sgd' | 'adamw'  (Phase 5+)
+  lr: 0.0003           # peak learning rate (AdamW; was 0.05 for SGD)
+  min_lr: 0.00001      # cosine decay floor (Phase 5+)
+  warmup_steps: 50     # linear warmup steps (Phase 5+)
+  beta1: 0.9           # AdamW momentum decay
+  beta2: 0.999         # AdamW RMS decay
+  weight_decay: 0.01   # decoupled L2 coefficient (Phase 5+)
+  grad_clip: 1.0       # global gradient norm clip (0 = off) (Phase 5+)
+  batch_size: 16
+  epochs: 500
+  seed: 42
+  val_split: 0.1       # fraction of corpus held out for validation (Phase 5+)
+  val_every: 50        # evaluate val loss every N steps (Phase 5+)
+
+data:
+  corpus_path: data/corpus.txt
+
+sampling:
+  temperature: 1.0     # 1.0 = unscaled probs; <1 = sharper; >1 = more random
+  top_k: 0             # top-k filter: keep only k highest tokens (0 = off)
+  top_p: 1.0           # nucleus sampling: keep tokens summing to p (1.0 = off)
+  rep_penalty: 1.0     # repetition penalty: >1 suppresses already-seen tokens
+  greedy: false        # if true, always pick argmax (overrides temp/top_k/top_p)
+  max_new_tokens: 120
+  seed_text: "t"       # generation prompt
+
+dashboard:
+  sample_every: 50     # print a generated sample every N steps
+  log_every: 10        # print loss/weight row every N steps
+  track_layer: embed
+  track_index: [0, 0]  # E[0,0] — watch this scalar move during training
