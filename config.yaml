@@ -1,10 +1,25 @@
 model:
-  type: transformer    # 'bigram' (Phase 2) | 'transformer' (Phase 3+)
+  type: transformer    # 'bigram' (Phase 2) | 'transformer' (Phase 3+) | 'modern' (Phase 9/10)
   block_size: 32       # context window length (tokens seen before predicting next)
   embed_dim: 64        # embedding / hidden dimension
   n_layers: 2          # Phase 4: stack N transformer blocks (was 1 in Phase 3)
   n_heads: 4           # Phase 4: H parallel attention heads (was 1 in Phase 3)
   dropout: 0.1         # Phase 4: dropout rate (0.0 = disabled, used in Phase 3)
+
+  # ── Phase 9/10 — only read when type: modern ──────────────────────────────
+  norm:    rmsnorm     # 'layernorm' (Phase 3) | 'rmsnorm' (LLaMA/Mistral)
+  ffn:     swiglu      # 'relu'      (Phase 3) | 'swiglu' (LLaMA/PaLM)
+  pos_enc: rope        # 'learned'   (Phase 3) | 'rope'   (LLaMA/Falcon)
+  n_kv_heads: 2        # GQA: 1..n_heads. Equal to n_heads = standard MHA
+
+  moe:                 # Phase 10: Mixture of Experts
+    enabled: false     # true replaces every dense FFN with a routed expert set
+    n_experts: 4       # E — total experts per layer
+    top_k: 2           # k — experts consulted per token
+    n_shared: 1        # expert applied to every token, outside the routing
+    balance: bias      # 'none' (watch it collapse) | 'aux' | 'bias'
+    aux_alpha: 0.01    # weight of the auxiliary balancing loss
+    bias_rate: 0.001   # gamma for the auxiliary-loss-free bias update
 
 training:
   optimizer: adamw     # 'sgd' | 'adamw'  (Phase 5+)

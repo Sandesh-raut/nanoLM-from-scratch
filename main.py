@@ -52,6 +52,14 @@ def apply_cli(cfg: dict, args: argparse.Namespace) -> dict:
         'training.grad_clip':      args.grad_clip,
         'training.warmup_steps':   args.warmup_steps,
         'training.val_split':      args.val_split,
+        'model.norm':              args.norm,
+        'model.ffn':               args.ffn,
+        'model.pos_enc':           args.pos_enc,
+        'model.n_kv_heads':        args.n_kv_heads,
+        'model.moe.enabled':       args.moe,
+        'model.moe.n_experts':     args.n_experts,
+        'model.moe.top_k':         args.top_k,
+        'model.moe.balance':       args.balance,
     }
     for dotkey, value in overrides.items():
         if value is None:
@@ -89,6 +97,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument('--grad_clip',       type=float, default=None, help='gradient norm clip threshold (Phase 5+)')
     p.add_argument('--warmup_steps',    type=int,   default=None, help='LR warmup steps (Phase 5+)')
     p.add_argument('--val_split',       type=float, default=None, help='validation fraction 0-1 (Phase 5+)')
+    # Phase 9/10 — only used with --model modern
+    p.add_argument('--norm',            type=str,   default=None, help='layernorm | rmsnorm (Phase 9)')
+    p.add_argument('--ffn',             type=str,   default=None, help='relu | swiglu (Phase 9)')
+    p.add_argument('--pos_enc',         type=str,   default=None, help='learned | rope (Phase 9)')
+    p.add_argument('--n_kv_heads',      type=int,   default=None, help='KV heads for GQA (Phase 9)')
+    p.add_argument('--moe',             action='store_true', default=None,
+                   help='enable Mixture of Experts (Phase 10)')
+    p.add_argument('--n_experts',       type=int,   default=None, help='experts per layer (Phase 10)')
+    p.add_argument('--top_k',           type=int,   default=None, help='experts consulted per token (Phase 10)')
+    p.add_argument('--balance',         type=str,   default=None,
+                   help='MoE load balancing: none | aux | bias (Phase 10)')
     return p.parse_args()
 
 
@@ -129,6 +148,28 @@ def main():
             vocab_size=tokenizer.vocab_size,
             embed_dim=cfg['model']['embed_dim'],
             seed=seed,
+        )
+    elif model_type == 'modern':
+        from model.modern_transformer import ModernTransformerLM
+        mcfg = cfg['model']
+
+        # 'enabled' is a config-only switch; the model takes the rest as kwargs
+        moe_cfg = dict(mcfg.get('moe') or {})
+        moe_cfg = moe_cfg if moe_cfg.pop('enabled', False) else None
+
+        model = ModernTransformerLM(
+            vocab_size=tokenizer.vocab_size,
+            embed_dim=mcfg['embed_dim'],
+            block_size=block_size,
+            n_layers=mcfg.get('n_layers', 2),
+            n_heads=mcfg.get('n_heads', 4),
+            n_kv_heads=mcfg.get('n_kv_heads'),
+            dropout=mcfg.get('dropout', 0.0),
+            seed=seed,
+            norm=mcfg.get('norm', 'rmsnorm'),
+            ffn=mcfg.get('ffn', 'swiglu'),
+            pos_enc=mcfg.get('pos_enc', 'rope'),
+            moe=moe_cfg,
         )
     else:
         from model.transformer import TransformerLM

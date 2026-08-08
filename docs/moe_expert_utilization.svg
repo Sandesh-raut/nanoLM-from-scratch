@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" font-family="ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+<rect width="860" height="430" fill="#ffffff"/>
+<text x="70" y="32" font-size="18" font-weight="600" fill="#1a1a1a">Where 8 experts actually receive tokens</text>
+<text x="70" y="52" font-size="12.5" fill="#666">top-1 routing · 500 steps · dashed line = even split (12.5%)</text>
+<text x="70.0" y="78" font-size="13" font-weight="600" fill="#d1495b">no balancing</text>
+<text x="70.0" y="96" font-size="11.5" fill="#666">entropy 0.72 · loss 2.176 · 1 unused</text>
+<rect x="70.0" y="110.0" width="18.7" height="200.0" fill="#d1495b" opacity="0.88"/>
+<rect x="94.0" y="276.7" width="18.7" height="33.3" fill="#d1495b" opacity="0.88"/>
+<rect x="117.9" y="303.5" width="18.7" height="6.5" fill="#d1495b" opacity="0.88"/>
+<rect x="141.9" y="302.5" width="18.7" height="7.5" fill="#d1495b" opacity="0.88"/>
+<rect x="165.8" y="309.5" width="18.7" height="0.6" fill="#d1495b" opacity="0.28"/>
+<rect x="189.8" y="295.6" width="18.7" height="14.4" fill="#d1495b" opacity="0.88"/>
+<rect x="213.8" y="194.1" width="18.7" height="115.9" fill="#d1495b" opacity="0.88"/>
+<rect x="237.7" y="306.0" width="18.7" height="4.0" fill="#d1495b" opacity="0.88"/>
+<line x1="70.0" y1="310.0" x2="261.7" y2="310.0" stroke="#bbb" stroke-width="1"/>
+<line x1="70.0" y1="262.2" x2="261.7" y2="262.2" stroke="#333" stroke-width="1" stroke-dasharray="4 3" opacity="0.55"/>
+<text x="70.0" y="326.0" font-size="10.5" fill="#888">expert 0 … 7</text>
+<text x="70.0" y="344.0" font-size="11" fill="#444">busiest 52.3%</text>
+<text x="306.66666666666663" y="78" font-size="13" font-weight="600" fill="#e0a458">auxiliary loss</text>
+<text x="306.66666666666663" y="96" font-size="11.5" fill="#666">entropy 0.97 · loss 2.259</text>
+<rect x="306.7" y="241.8" width="18.7" height="68.2" fill="#e0a458" opacity="0.88"/>
+<rect x="330.6" y="258.3" width="18.7" height="51.7" fill="#e0a458" opacity="0.88"/>
+<rect x="354.6" y="260.7" width="18.7" height="49.3" fill="#e0a458" opacity="0.88"/>
+<rect x="378.5" y="243.3" width="18.7" height="66.7" fill="#e0a458" opacity="0.88"/>
+<rect x="402.5" y="273.2" width="18.7" height="36.8" fill="#e0a458" opacity="0.88"/>
+<rect x="426.5" y="275.2" width="18.7" height="34.8" fill="#e0a458" opacity="0.88"/>
+<rect x="450.4" y="293.1" width="18.7" height="16.9" fill="#e0a458" opacity="0.88"/>
+<rect x="474.4" y="252.3" width="18.7" height="57.7" fill="#e0a458" opacity="0.88"/>
+<line x1="306.66666666666663" y1="310.0" x2="498.3" y2="310.0" stroke="#bbb" stroke-width="1"/>
+<line x1="306.66666666666663" y1="262.2" x2="498.3" y2="262.2" stroke="#333" stroke-width="1" stroke-dasharray="4 3" opacity="0.55"/>
+<text x="306.66666666666663" y="326.0" font-size="10.5" fill="#888">expert 0 … 7</text>
+<text x="306.66666666666663" y="344.0" font-size="11" fill="#444">busiest 17.8%</text>
+<text x="543.3333333333333" y="78" font-size="13" font-weight="600" fill="#2a9d8f">aux-loss-free bias</text>
+<text x="543.3333333333333" y="96" font-size="11.5" fill="#666">entropy 0.92 · loss 2.170</text>
+<rect x="543.3" y="272.2" width="18.7" height="37.8" fill="#2a9d8f" opacity="0.88"/>
+<rect x="567.3" y="257.3" width="18.7" height="52.7" fill="#2a9d8f" opacity="0.88"/>
+<rect x="591.2" y="281.1" width="18.7" height="28.9" fill="#2a9d8f" opacity="0.88"/>
+<rect x="615.2" y="186.6" width="18.7" height="123.4" fill="#2a9d8f" opacity="0.88"/>
+<rect x="639.2" y="292.1" width="18.7" height="17.9" fill="#2a9d8f" opacity="0.88"/>
+<rect x="663.1" y="263.2" width="18.7" height="46.8" fill="#2a9d8f" opacity="0.88"/>
+<rect x="687.1" y="267.2" width="18.7" height="42.8" fill="#2a9d8f" opacity="0.88"/>
+<rect x="711.0" y="278.2" width="18.7" height="31.8" fill="#2a9d8f" opacity="0.88"/>
+<line x1="543.3333333333333" y1="310.0" x2="735.0" y2="310.0" stroke="#bbb" stroke-width="1"/>
+<line x1="543.3333333333333" y1="262.2" x2="735.0" y2="262.2" stroke="#333" stroke-width="1" stroke-dasharray="4 3" opacity="0.55"/>
+<text x="543.3333333333333" y="326.0" font-size="10.5" fill="#888">expert 0 … 7</text>
+<text x="543.3333333333333" y="344.0" font-size="11" fill="#444">busiest 32.3%</text>
+<text x="70" y="416" font-size="11.5" fill="#666">nanoLM Phase 10 — hand-written NumPy MoE. Without balancing the router concentrates and some experts stop being used at all.</text>
+</svg>

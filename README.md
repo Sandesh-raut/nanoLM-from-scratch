@@ -23,6 +23,7 @@ modern LLMs as runnable code:
 | 7 | `model/transformer_torch.py`, `main_torch.py` | Autograd, GPU backends |
 | 8 | `train/trainer_sft.py`, `demo_dpo.py` | SFT with response masking, DPO |
 | 9 | `model/modern_transformer.py`, `model/kv_cache.py`, `model/quantize.py` | RoPE, RMSNorm, SwiGLU, GQA, KV-cache, int8 quantization |
+| 10 | `model/moe.py`, `bench_phase10.py` | Mixture of Experts: top-k routing, load balancing, sparsity |
 
 All hand-written backward passes are verified against finite differences in
 `tests/test_gradcheck.py`.
@@ -89,12 +90,28 @@ uv run python3 main_sft.py --system "You are a pirate."
 Loss is computed only over assistant-response tokens (response masking).
 Prints a before/after comparison table and saves `runs/latest_sft.npz`.
 
+### Mixture of Experts (Phase 10)
+
+Every dense FFN becomes a set of experts with a router that sends each token to
+only the top-k of them. Total parameters grow; parameters used per token do not.
+
+```bash
+uv run python3 main.py --model modern --moe --corpus data/corpus_large.txt
+uv run python3 main.py --model modern --moe --n_experts 16 --top_k 2 --balance bias
+```
+
+`--balance` selects how routing load is kept even: `none` (watch it concentrate),
+`aux` (auxiliary load-balancing loss), or `bias` (auxiliary-loss-free bias
+updates, DeepSeek-V3 style). All MoE settings also live under `model.moe` in
+`config.yaml`.
+
 ### Demos and benchmarks
 
 ```bash
 uv run python3 demo_session.py    # guided walkthrough: SFT masking, int8, KV-cache
 uv run python3 demo_dpo.py        # DPO loss computed on preference pairs (conceptual)
 uv run python3 bench_phase9.py    # modern-upgrade ablations, KV-cache speedup, int8 stats
+uv run python3 bench_phase10.py   # MoE sparsity, load balancing, writes a utilization chart
 uv run python3 run_history.py     # compare past runs side by side
 ```
 
@@ -122,15 +139,17 @@ nanoLM/
 ├── bench_phase9.py         ← ablation + inference benchmarks
 ├── run_history.py          ← compare runs
 ├── data/
-│   ├── corpus.txt          ← training text (swappable)
+│   ├── corpus.txt          ← tiny corpus, 24-char vocab (fast runs)
+│   ├── corpus_large.txt    ← 600K chars, prose + code (see data/README.md)
 │   ├── tokenizer.py        ← char tokenizer (encode / decode / save / load)
 │   ├── loader.py           ← random batch sampler + train/val split
 │   └── instruct_dataset.py ← instruct template, pairs, response_mask()
 ├── model/
 │   ├── bigram.py           ← E → W → logits, backprop by hand
 │   ├── transformer.py      ← LayerNorm, MHA, FFN, TransformerLM
-│   ├── modern_transformer.py ← RoPE/RMSNorm/SwiGLU/GQA model
+│   ├── modern_transformer.py ← RoPE/RMSNorm/SwiGLU/GQA/MoE model
 │   ├── rope.py · norms.py · activations.py ← modern components
+│   ├── moe.py              ← routed experts + load balancing
 │   ├── kv_cache.py         ← cached autoregressive decode
 │   ├── quantize.py         ← int8 weight quantization
 │   └── transformer_torch.py ← PyTorch mirror

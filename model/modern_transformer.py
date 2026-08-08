@@ -42,7 +42,53 @@ import numpy as np
 from model.transformer import LayerNorm, Dropout, FFN
 from model.norms      import RMSNorm
 from model.activations import SwiGLUFFN
+from model.moe         import MoEFFN
 from model.rope        import rope_freqs, apply_rope, apply_rope_backward
+
+
+# Weight names a dense FFN may carry, in a fixed order. SwiGLU has Wg/Wv/W2,
+# ReLU FFN has W1/b1/W2/b2; iterating one tuple keeps _flat_params and
+# _flat_grads walking the same sequence whichever is active.
+_FFN_KEYS = ('Wg', 'Wv', 'W2', 'W1', 'b1', 'b2')
+
+
+def _ffn_param_items(ffn, prefix: str):
+    """Yield (name, array) for a dense FFN or an MoE layer's whole expert set."""
+    if isinstance(ffn, MoEFFN):
+        yield f'{prefix}.Wr', ffn.Wr
+        for i, expert in enumerate(ffn.experts):
+            for key in _FFN_KEYS:
+                arr = getattr(expert, key, None)
+                if arr is not None:
+                    yield f'{prefix}.expert[{i}].{key}', arr
+        if ffn.shared is not None:
+            for key in _FFN_KEYS:
+                arr = getattr(ffn.shared, key, None)
+                if arr is not None:
+                    yield f'{prefix}.shared.{key}', arr
+    else:
+        for key in _FFN_KEYS:
+            arr = getattr(ffn, key, None)
+            if arr is not None:
+                yield f'{prefix}.{key}', arr
+
+
+def _ffn_grad_items(ffn, grads: dict, prefix: str):
+    """Yield (name, array) in exactly the order _ffn_param_items() produces."""
+    if isinstance(ffn, MoEFFN):
+        yield f'{prefix}.Wr', grads['Wr']
+        for i, expert_g in enumerate(grads['experts']):
+            for key in _FFN_KEYS:
+                if key in expert_g:
+                    yield f'{prefix}.expert[{i}].{key}', expert_g[key]
+        if ffn.shared is not None:
+            for key in _FFN_KEYS:
+                if key in grads['shared']:
+                    yield f'{prefix}.shared.{key}', grads['shared'][key]
+    else:
+        for key in _FFN_KEYS:
+            if key in grads:
+                yield f'{prefix}.{key}', grads[key]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -286,12 +332,16 @@ class ModernBlock:
         norm_cls,
         ffn_cls,
         seed:       int,
+        moe:        dict | None = None,
     ):
         self.norm1     = norm_cls(dim)
         self.attn      = ModernAttention(dim, n_heads, n_kv_heads, use_rope, seed)
         self.attn_drop = Dropout(dropout)
         self.norm2     = norm_cls(dim)
-        self.ffn       = ffn_cls(dim, seed + 1)
+        self.ffn       = (
+            MoEFFN(dim, expert_cls=ffn_cls, seed=seed + 1, **moe)
+            if moe else ffn_cls(dim, seed + 1)
+        )
         self.ffn_drop  = Dropout(dropout)
 
     def forward(
@@ -302,6 +352,9 @@ class ModernBlock:
     ) -> np.ndarray:
         self.attn_drop.training = training
         self.ffn_drop.training  = training
+        if hasattr(self.ffn, 'training'):
+            # MoE updates its routing bias during training steps only
+            self.ffn.training = training
 
         # Attention sub-block
         h = x + self.attn_drop.forward(
@@ -363,6 +416,7 @@ class ModernTransformerLM:
         norm:        str   = 'layernorm',
         ffn:         str   = 'relu',
         pos_enc:     str   = 'learned',
+        moe:         dict | None = None,
     ):
         self.vocab_size  = vocab_size
         self.embed_dim   = embed_dim
@@ -374,6 +428,7 @@ class ModernTransformerLM:
         self.norm_type   = norm
         self.ffn_type    = ffn
         self.pos_enc     = pos_enc
+        self.moe         = dict(moe) if moe else None
 
         # Select component classes
         norm_cls = RMSNorm   if norm    == 'rmsnorm' else LayerNorm
@@ -400,6 +455,7 @@ class ModernTransformerLM:
                 norm_cls   = norm_cls,
                 ffn_cls    = ffn_cls,
                 seed       = seed + i * 10,
+                moe        = self.moe,
             )
             for i in range(n_layers)
         ]
@@ -478,6 +534,10 @@ class ModernTransformerLM:
             loss = float(nll.mean())
             dlogits /= N
 
+        # MoE auxiliary balancing term. Each MoE layer injects its own gradient
+        # during backward, so only the scalar has to reach the reported loss.
+        loss += self.aux_loss()
+
         dlogits = dlogits.reshape(B, T, self.vocab_size)
 
         h_norm = self._c['h_norm']
@@ -536,10 +596,7 @@ class ModernTransformerLM:
             yield f'{p}.norm1.gamma', block.norm1.gamma
             if hasattr(block.norm1, 'beta'):
                 yield f'{p}.norm1.beta', block.norm1.beta
-            for key in ('Wg', 'Wv', 'W2', 'W1', 'b1', 'b2'):
-                arr = getattr(block.ffn, key, None)
-                if arr is not None:
-                    yield f'{p}.ffn.{key}', arr
+            yield from _ffn_param_items(block.ffn, f'{p}.ffn')
             yield f'{p}.norm2.gamma', block.norm2.gamma
             if hasattr(block.norm2, 'beta'):
                 yield f'{p}.norm2.beta', block.norm2.beta
@@ -565,10 +622,7 @@ class ModernTransformerLM:
             yield f'{p}.norm1.gamma', bg['norm1']['gamma']
             if 'beta' in bg['norm1']:
                 yield f'{p}.norm1.beta', bg['norm1']['beta']
-            ffn_g = bg['ffn']
-            for key in ('Wg', 'Wv', 'W2', 'W1', 'b1', 'b2'):
-                if key in ffn_g:
-                    yield f'{p}.ffn.{key}', ffn_g[key]
+            yield from _ffn_grad_items(self.blocks[i].ffn, bg['ffn'], f'{p}.ffn')
             yield f'{p}.norm2.gamma', bg['norm2']['gamma']
             if 'beta' in bg['norm2']:
                 yield f'{p}.norm2.beta', bg['norm2']['beta']
@@ -587,11 +641,52 @@ class ModernTransformerLM:
         if self.ffn_type   == 'swiglu':  upgrades.append('SwiGLU')
         if self.pos_enc    == 'rope':     upgrades.append('RoPE')
         if self.n_kv_heads < self.n_heads: upgrades.append(f'GQA(kv={self.n_kv_heads})')
+        if self.moe:
+            upgrades.append(
+                f"MoE({self.moe.get('n_experts', 4)}e/top{self.moe.get('top_k', 2)}"
+                f",{self.moe.get('balance', 'bias')})"
+            )
         tag = '+'.join(upgrades) if upgrades else 'baseline'
+        phase = 10 if self.moe else 9
         return (
-            f"Phase 9 · ModernTransformerLM [{tag}] · "
+            f"Phase {phase} · ModernTransformerLM [{tag}] · "
             f"{self.n_layers}L · {self.n_heads}H · D={self.embed_dim}"
         )
+
+    # ── MoE helpers ──────────────────────────────────────────────────────────
+
+    def _moe_layers(self) -> list:
+        return [b.ffn for b in self.blocks if isinstance(b.ffn, MoEFFN)]
+
+    def aux_loss(self) -> float:
+        """Summed auxiliary balancing loss from the most recent forward pass."""
+        return float(sum(m.aux_loss for m in self._moe_layers()))
+
+    def active_param_count(self) -> int:
+        """
+        Parameters touched when processing one token. For a dense model this
+        equals the total; for MoE only top_k of the experts in each layer run,
+        and the gap between the two numbers is the reason MoE exists.
+        """
+        total = self.param_count()['total']
+        for m in self._moe_layers():
+            total -= m.param_count() - m.active_param_count()
+        return total
+
+    def expert_utilization(self) -> list:
+        """Per-layer routing distribution from the last forward — shows collapse."""
+        return [m.utilization() for m in self._moe_layers()]
+
+    def balance_entropy(self) -> float:
+        """
+        Mean normalized routing entropy across MoE layers, in [0, 1].
+        1.0 is a perfectly even split; near 0 means the router has collapsed
+        onto a single expert.
+        """
+        layers = self._moe_layers()
+        if not layers:
+            return 1.0
+        return float(np.mean([m.balance_entropy() for m in layers]))
 
     def param_table(self) -> list[tuple[str, str, int]]:
         V, D, T = self.vocab_size, self.embed_dim, self.block_size

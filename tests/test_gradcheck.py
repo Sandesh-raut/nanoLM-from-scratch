@@ -14,6 +14,7 @@ The two must agree. Same trick checks each weight matrix.
 Covered backward passes:
   LayerNorm, RMSNorm, FFN (ReLU), SwiGLU, RoPE,
   MultiHeadAttention, ModernAttention (MHA / GQA / MQA, with and without RoPE),
+  MoE (router, individual experts, shared expert, auxiliary balancing loss),
   and the masked-vs-unmasked loss in *TransformerLM.loss_and_grads.
 """
 
@@ -30,6 +31,7 @@ from model.norms              import RMSNorm
 from model.activations        import SwiGLUFFN
 from model.rope               import apply_rope, apply_rope_backward, rope_freqs
 from model.modern_transformer import ModernAttention
+from model.moe                import MoEFFN
 
 
 EPS = 1e-6
@@ -180,6 +182,148 @@ def test_loss_mask_zeroes_instruction_gradient():
     assert abs(loss_a - loss_b) < 1e-9
 
 
+# ── Mixture of Experts ───────────────────────────────────────────────────────
+#
+# The MoE objective is not just sum(out*R): when balancing is set to 'aux' the
+# auxiliary load-balancing term is part of the loss too, and its gradient is
+# applied inside MoEFFN.backward(). Both have to appear in the scalar that the
+# finite difference measures, or the router gradient looks wrong.
+#
+# Note the top-k *selection* is not differentiable. These checks perturb by 1e-6
+# with a fixed seed, which is far too small to flip which experts win, so the
+# routing stays fixed across the +eps and -eps evaluations.
+
+_MOE_CASES = [
+    (FFN,        'none'),
+    (FFN,        'aux'),
+    (SwiGLUFFN,  'none'),
+    (SwiGLUFFN,  'aux'),
+]
+
+
+def _moe_scalar(moe, x, R):
+    """Full objective: upstream term plus any auxiliary balancing loss."""
+    return float((moe.forward(x) * R).sum()) + moe.aux_loss
+
+
+def _make_moe(expert_cls, balance, n_shared=0, dim=16):
+    return MoEFFN(dim, n_experts=4, top_k=2, expert_cls=expert_cls,
+                  seed=3, n_shared=n_shared, balance=balance)
+
+
+@pytest.mark.parametrize('expert_cls,balance', _MOE_CASES)
+def test_moe_input_grad(expert_cls, balance):
+    rng = np.random.default_rng(11)
+    moe = _make_moe(expert_cls, balance)
+    x   = rng.standard_normal((2, 5, 16))
+    R   = rng.standard_normal((2, 5, 16))
+
+    moe.forward(x)
+    dx, _ = moe.backward(R)
+
+    worst = 0.0
+    for idx in _sample_idxs(x.shape, 20, rng):
+        old = x[idx]
+        x[idx] = old + EPS; lp = _moe_scalar(moe, x, R)
+        x[idx] = old - EPS; lm = _moe_scalar(moe, x, R)
+        x[idx] = old
+        worst = max(worst, abs((lp - lm) / (2 * EPS) - dx[idx]))
+    assert worst < TOL, f"MoE input grad err={worst:.2e} ({expert_cls.__name__}, {balance})"
+
+
+@pytest.mark.parametrize('expert_cls,balance', _MOE_CASES)
+def test_moe_router_grad(expert_cls, balance):
+    """The router matrix is the only genuinely new derivation in Phase 10."""
+    rng = np.random.default_rng(12)
+    moe = _make_moe(expert_cls, balance)
+    x   = rng.standard_normal((2, 5, 16))
+    R   = rng.standard_normal((2, 5, 16))
+
+    moe.forward(x)
+    _, grads = moe.backward(R)
+
+    worst = 0.0
+    for idx in _sample_idxs(moe.Wr.shape, 20, rng):
+        old = moe.Wr[idx]
+        moe.Wr[idx] = old + EPS; lp = _moe_scalar(moe, x, R)
+        moe.Wr[idx] = old - EPS; lm = _moe_scalar(moe, x, R)
+        moe.Wr[idx] = old
+        worst = max(worst, abs((lp - lm) / (2 * EPS) - grads['Wr'][idx]))
+    assert worst < TOL, f"MoE router grad err={worst:.2e} ({expert_cls.__name__}, {balance})"
+
+
+@pytest.mark.parametrize('expert_cls,key', [(FFN, 'W1'), (FFN, 'b1'), (SwiGLUFFN, 'Wg')])
+def test_moe_expert_weight_grads(expert_cls, key):
+    """Gradient must reach an individual expert scaled by its gate weight."""
+    rng = np.random.default_rng(13)
+    moe = _make_moe(expert_cls, 'none')
+    x   = rng.standard_normal((2, 5, 16))
+    R   = rng.standard_normal((2, 5, 16))
+
+    moe.forward(x)
+    _, grads = moe.backward(R)
+
+    W = getattr(moe.experts[0], key)
+    worst = 0.0
+    for idx in _sample_idxs(W.shape, 12, rng):
+        old = W[idx]
+        W[idx] = old + EPS; lp = _moe_scalar(moe, x, R)
+        W[idx] = old - EPS; lm = _moe_scalar(moe, x, R)
+        W[idx] = old
+        worst = max(worst, abs((lp - lm) / (2 * EPS) - grads['experts'][0][key][idx]))
+    assert worst < TOL, f"MoE expert[0].{key} grad err={worst:.2e}"
+
+
+@pytest.mark.parametrize('top_k', [1, 2, 4])
+def test_moe_router_grad_at_every_top_k(top_k):
+    """
+    Regression guard. If the gate is a softmax over only the *selected* logits,
+    then at k=1 it is identically 1.0 — a constant, whose derivative is zero —
+    so the router gets no gradient and never learns, silently. Deriving the gate
+    from the softmax over all experts keeps the gradient real at every k.
+    """
+    rng = np.random.default_rng(15)
+    moe = MoEFFN(16, n_experts=4, top_k=top_k, expert_cls=FFN, seed=3, balance='none')
+    x   = rng.standard_normal((2, 5, 16))
+    R   = rng.standard_normal((2, 5, 16))
+
+    moe.forward(x)
+    _, grads = moe.backward(R)
+
+    assert np.abs(grads['Wr']).max() > 1e-8, \
+        f"router gradient vanished at top_k={top_k} — the router cannot learn"
+
+    worst = 0.0
+    for idx in _sample_idxs(moe.Wr.shape, 12, rng):
+        old = moe.Wr[idx]
+        moe.Wr[idx] = old + EPS; lp = _moe_scalar(moe, x, R)
+        moe.Wr[idx] = old - EPS; lm = _moe_scalar(moe, x, R)
+        moe.Wr[idx] = old
+        worst = max(worst, abs((lp - lm) / (2 * EPS) - grads['Wr'][idx]))
+    assert worst < TOL, f"MoE router grad err={worst:.2e} at top_k={top_k}"
+
+
+def test_moe_shared_expert_grad():
+    """The always-on shared expert sits outside the routing and must still learn."""
+    rng = np.random.default_rng(14)
+    moe = _make_moe(SwiGLUFFN, 'aux', n_shared=1)
+    x   = rng.standard_normal((2, 5, 16))
+    R   = rng.standard_normal((2, 5, 16))
+
+    moe.forward(x)
+    _, grads = moe.backward(R)
+
+    W = moe.shared.Wg
+    worst = 0.0
+    for idx in _sample_idxs(W.shape, 12, rng):
+        old = W[idx]
+        W[idx] = old + EPS; lp = _moe_scalar(moe, x, R)
+        W[idx] = old - EPS; lm = _moe_scalar(moe, x, R)
+        W[idx] = old
+        worst = max(worst, abs((lp - lm) / (2 * EPS) - grads['shared']['Wg'][idx]))
+    assert worst < TOL, f"MoE shared expert grad err={worst:.2e}"
+
+
 if __name__ == "__main__":
     # Allow running directly without pytest.
     import traceback
@@ -187,10 +331,13 @@ if __name__ == "__main__":
     passed = 0
     for fn in fns:
         try:
-            sig = fn.__code__.co_varnames[:fn.__code__.co_argcount]
-            if 'n_kv' in sig:
-                for args in [(4, False), (4, True), (2, True), (1, False)]:
-                    fn(*args)
+            # Replay whatever @pytest.mark.parametrize declares, so this runner
+            # stays correct as parametrized cases are added.
+            param = next((m for m in getattr(fn, 'pytestmark', [])
+                          if m.name == 'parametrize'), None)
+            if param:
+                for case in param.args[1]:
+                    fn(*(case if isinstance(case, tuple) else (case,)))
             else:
                 fn()
             print(f"  PASS  {fn.__name__}")

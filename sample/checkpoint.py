@@ -72,6 +72,13 @@ def save(model, tokenizer: CharTokenizer, path: str) -> str:
         flat['__norm']       = np.array([model.norm_type],  dtype=object)
         flat['__ffn']        = np.array([model.ffn_type],   dtype=object)
         flat['__pos_enc']    = np.array([model.pos_enc],    dtype=object)
+        flat['__moe']        = np.array([getattr(model, 'moe', None)], dtype=object)
+
+        # Routing bias is updated by a rule rather than a gradient, so it never
+        # appears in _flat_params — save it or a reloaded MoE model routes
+        # differently from the one that was trained.
+        for i, layer in enumerate(getattr(model, '_moe_layers', list)()):
+            flat[f'__moe_bias_{i}'] = layer.expert_bias
 
     # Tokenizer vocab: sorted list of chars
     flat['__vocab'] = np.array(
@@ -133,7 +140,12 @@ def load(path: str):
             norm=str(data['__norm'][0]),
             ffn=str(data['__ffn'][0]),
             pos_enc=str(data['__pos_enc'][0]),
+            moe=(data['__moe'][0] if '__moe' in data.files else None),
         )
+        for i, layer in enumerate(model._moe_layers()):
+            key = f'__moe_bias_{i}'
+            if key in data.files:
+                layer.expert_bias[:] = data[key]
     else:
         from model.transformer import TransformerLM
         model = TransformerLM(
